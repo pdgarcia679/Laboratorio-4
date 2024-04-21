@@ -1,0 +1,191 @@
+ /*
+  Universidad del Valle de Guatemala
+  IE2023: Programacion de Microcontroladores
+  Autor: Pablo Garcia
+  Proyecto: Laboratorio 4
+  Archivo: Laboratorio4.asm (main)
+  Hardware: ATMEGA328P
+  Created: 09/04/2024
+ */
+
+/* Program libraries */
+
+#include <avr/io.h>
+#include <stdint.h>
+#include <avr/interrupt.h>
+
+uint8_t Functions = 0x00;
+uint8_t PrevPins = 0x00;
+uint8_t NowPins = 0x0C;
+uint8_t Count = 0x00;
+uint8_t ADC6H = 0x00;
+uint8_t ADC6L = 0x00;
+uint8_t PrevCOMs = 0x10;
+uint8_t NowCOMs = 0x10;
+const uint8_t Tabla7Seg[16] = {0x3F, 0x06, 0x5B, 0x4F, 0x66, 0x6D, 0x7D, 0x07, 0x7F, 0x6F, 0x77, 0x7C, 0x39, 0x5E, 0x79, 0x71};
+const uint8_t IncButton = (1<<PINC2);
+const uint8_t DecButton = (1<<PINC3);
+const uint8_t Count6 = (1<<PORTB6);
+const uint8_t Count7 = (1<<PORTB7);
+const uint8_t IncCount = 1;
+const uint8_t DecCount = 2;
+const uint8_t CompAlarm = 3;
+
+/* Functions prototypes */
+
+void setup (void);
+
+void SettingADC (void);
+
+void SettingTimer0 (void);
+
+void UpdateFunctions (void);
+
+void UpdateCountLEDs (void);
+
+void UpdateDisplay(void);
+
+int main(void)
+{
+    setup();
+	SettingADC();
+	SettingTimer0();
+    while (1) 
+    {
+		if (NowPins != PrevPins) {
+			UpdateFunctions();
+			if (Functions == IncCount) {
+				Functions = 0;
+				Count++;
+				UpdateCountLEDs();
+			}
+			else if (Functions == DecCount) {
+				Functions = 0;
+				Count--;
+				UpdateCountLEDs();
+			}
+		}
+		if (NowCOMs != PrevCOMs) {
+			PrevCOMs = NowCOMs;
+			UpdateDisplay();
+		}
+		if (Functions == CompAlarm) {
+			Functions = 0;
+			if ((ADCH) > (Count)) {
+				PORTD |= (1<<PORTD7);
+			}
+			else {
+				PORTD &= ~(1<<PORTD7);
+			}
+		}
+    }
+}
+
+void setup (void) {
+	/* Interrupts */
+	sei();
+	PCICR |= (1<<PCIE1);						// PORTC pin change enable
+	PCMSK1 |= (1<<PCINT10 | 1<<PCINT11);		// PC2 y PC3 pin change enable
+	
+	/* Clock */
+	CLKPR |= (1<<CLKPCE | 1<<CLKPS2);			// Prescaler 16: Clock 1 MHz
+	
+	/* Port pins
+	   Inputs: PC2, PC3 (pull-up)
+	   Outputs: PORTB, PC0, PC1, PC4, PC5, PORTD
+	*/
+	UCSR0B &= ~(1<<TXEN0 | 1<<RXEN0);			// Disable	serial functions of PD0 and PD1
+	DDRB |= 0x3F;								// Outputs and inputs of PORTB
+	PORTB = 0x00;
+	DDRC |= 0x33;								// Outputs and inputs of PORTC
+	PORTC = 0x0C;
+	DDRD |= 0xFF;								// Outputs and inputs of PORTD
+	PORTD = 0x00;
+}
+
+void SettingADC(void) {
+	ADMUX = 0;
+	ADMUX |= (1<<REFS0 | 1<<ADLAR);		// AVcc and left justified
+	ADMUX |= (1<<MUX2 | 1<<MUX1);		// ADC6 selected
+	ADCSRA = 0;
+	ADCSRA |= (1<<ADEN | 1<<ADIE);		// ADC enabled and interrupt enabled
+	ADCSRA |= (1<<ADPS1 | 1<<ADPS0);	// ADC prescaler: 8. frequency: 125 kHz
+	ADCSRA |= (1<<ADSC | 1<<ADATE );	// First conversion and auto trigger enabled
+	ADCSRB = 0;
+}
+
+void SettingTimer0() {
+	TCCR0A = 0;
+	TCCR0B = 0;
+	TCCR0B |= (1<<CS01 | 1<<CS00);
+	TIMSK0 = 0;
+	TIMSK0 |= (1<<TOIE0);
+	TCNT0 = 100;
+}
+
+ISR(PCINT1_vect) {
+	NowPins = PINC;
+}
+
+ISR(ADC_vect) {
+	ADC6H = (ADCH >> 4);
+	ADC6L = (ADCH & 0x0F);
+	Functions = CompAlarm;
+}
+
+ISR(TIMER0_OVF_vect) {
+	TCNT0 = 100;
+	NowCOMs <<= 1;
+	if ((NowCOMs) == (0x40)) {
+		NowCOMs = 0x10;
+	}
+}
+
+void UpdateFunctions (void) {
+	PrevPins = NowPins;
+	// Negative edge of any button
+	if ((NowPins&(IncButton|DecButton)) != (IncButton|DecButton)) {
+		// Negative edge of IncButton
+		if (((~NowPins)&IncButton) == (IncButton)) {
+			Functions = IncCount;
+		}
+		// Negative edge of DecButton
+		else if (((~NowPins)&DecButton) == (DecButton)) {
+			Functions = DecCount;
+		}
+		else {}
+	}
+	// Positive edge of any button else {}
+}
+
+void UpdateCountLEDs(void) {
+	PORTB = Count;
+	if ((Count & Count6) == Count6) {
+		PORTC |= (1<<PORTC0);
+	}
+	else {
+		PORTC &= ~(1<<PORTC0);
+	}
+	if ((Count & Count7) == Count7) {
+		PORTC |= (1<<PORTC1);
+	}
+	else {
+		PORTC &= ~(1<<PORTC1);
+	}
+}
+
+void UpdateDisplay(void) {
+	if ((NowCOMs) == (0x10)) {
+		PORTD = Tabla7Seg[ADC6L];
+		PORTC |= (1<<PORTC4);
+		PORTC &= ~(1<<PORTC5);
+	}
+	else if ((NowCOMs) == (0x20)) {
+		PORTD = Tabla7Seg[ADC6H];
+		PORTC |= (1<<PORTC5);
+		PORTC &= ~(1<<PORTC4);
+	}
+	else {
+		PORTD = 0x00;
+	}
+}
