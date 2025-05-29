@@ -1,0 +1,1071 @@
+/* USER CODE BEGIN Header */
+/**
+ ******************************************************************************
+ * @file           : main.c
+ * @brief          : Main program body
+ ******************************************************************************
+ * @attention
+ *
+ * Copyright (c) 2025 STMicroelectronics.
+ * All rights reserved.
+ *
+ * This software is licensed under terms that can be found in the LICENSE file
+ * in the root directory of this software component.
+ * If no LICENSE file comes with this software, it is provided AS-IS.
+ *
+ ******************************************************************************
+ */
+/* USER CODE END Header */
+/* Includes ------------------------------------------------------------------*/
+#include "main.h"
+#include "fatfs.h"
+
+/* Private includes ----------------------------------------------------------*/
+/* USER CODE BEGIN Includes */
+#include "fatfs_sd.h"
+#include "string.h"
+#include "stdio.h"
+#include "stdint.h"
+
+#include <stdbool.h>
+
+#include "ili9341.h"
+#include "bitmaps.h"
+
+#include "Neopixel.h"
+
+/* USER CODE END Includes */
+
+/* Private typedef -----------------------------------------------------------*/
+/* USER CODE BEGIN PTD */
+
+/* USER CODE END PTD */
+
+/* Private define ------------------------------------------------------------*/
+/* USER CODE BEGIN PD */
+FATFS fs;
+FATFS *pfs;
+FIL fil;
+FRESULT fres;
+DWORD fre_clust;
+uint32_t totalSpace, freeSpace;
+char buffer[100];
+volatile char input = 0;
+char buffer_char[10];
+
+/* USER CODE END PD */
+
+/* Private macro -------------------------------------------------------------*/
+/* USER CODE BEGIN PM */
+
+/* USER CODE END PM */
+
+/* Private variables ---------------------------------------------------------*/
+I2C_HandleTypeDef hi2c1;
+
+SPI_HandleTypeDef hspi1;
+
+TIM_HandleTypeDef htim3;
+TIM_HandleTypeDef htim7;
+DMA_HandleTypeDef hdma_tim3_ch4_up;
+
+UART_HandleTypeDef huart4;
+UART_HandleTypeDef huart5;
+UART_HandleTypeDef huart2;
+
+/* USER CODE BEGIN PV */
+uint8_t buffer_uart_5[1];
+uint8_t buffer_uart_4[1];
+
+#define TRANSPARENT_COLOR 0x07F0
+#define COLOR_VERDE 0x07E0
+#define COLOR_AZUL  0x001F
+
+#define CAR_WIDTH 60
+#define CAR_HEIGHT 30
+#define CAR_SIZE (CAR_WIDTH*CAR_HEIGHT*2)
+uint8_t CAR[CAR_SIZE];
+
+#define COUNT_NUM_WIDTH 31
+#define COUNT_NUM_HEIGHT 31
+#define COUNT_NUM_SIZE (COUNT_NUM_WIDTH*COUNT_NUM_HEIGHT*2)
+uint8_t COUNT_NUM[COUNT_NUM_SIZE];
+
+float brilloled;
+
+int park_av = 4;             // Valor actual
+int totalpark = 0;
+int prev_totalpark = -1;
+
+uint8_t aTxBuffer[1];
+uint8_t aRxBuffer[1];
+
+uint8_t sensor_status = 0;
+uint8_t remote_av = 1;
+uint8_t remote_av_raw = 0;
+uint8_t remote_av_masked = 0;
+
+/* USER CODE END PV */
+
+/* Private function prototypes -----------------------------------------------*/
+void SystemClock_Config(void);
+static void MX_GPIO_Init(void);
+static void MX_DMA_Init(void);
+static void MX_USART2_UART_Init(void);
+static void MX_SPI1_Init(void);
+static void MX_UART4_Init(void);
+static void MX_UART5_Init(void);
+static void MX_TIM7_Init(void);
+static void MX_TIM3_Init(void);
+static void MX_I2C1_Init(void);
+/* USER CODE BEGIN PFP */
+
+/* USER CODE END PFP */
+
+/* Private user code ---------------------------------------------------------*/
+/* USER CODE BEGIN 0 */
+void transmit_uart(char *string);
+
+void erase_file(void);
+void list_files_on_sd(void);
+
+FRESULT SD_mount(void);
+FRESULT SD_unmount(void);
+FRESULT SD_open(const char *filename, BYTE mode);
+FRESULT SD_close(void);
+void SD_readLine(void);
+FRESULT SD_createFile(const char *filename);
+FRESULT SD_write(const char *text);
+
+void SD_readImageBin(const char *filename, uint8_t *dest, uint32_t size);
+
+void SD_info_display(uint8_t numero);
+
+void flip_horizontal(const uint8_t *src, uint8_t *dst, uint16_t width,
+		uint16_t height);
+
+void LCD_Bitmap_Black(unsigned int x, unsigned int y, unsigned int width,
+		unsigned int height, unsigned char bitmap[]);
+
+void Rect_Grueso(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
+		unsigned int c);
+
+void updatePixelsFromSensors(void);
+
+uint8_t getSensorStatusBits(void);
+void updateRemote_cars(uint8_t remote_masked);
+
+
+/* USER CODE END 0 */
+
+/**
+  * @brief  The application entry point.
+  * @retval int
+  */
+int main(void)
+{
+
+  /* USER CODE BEGIN 1 */
+
+  /* USER CODE END 1 */
+
+  /* MCU Configuration--------------------------------------------------------*/
+
+  /* Reset of all peripherals, Initializes the Flash interface and the Systick. */
+  HAL_Init();
+
+  /* USER CODE BEGIN Init */
+
+  /* USER CODE END Init */
+
+  /* Configure the system clock */
+  SystemClock_Config();
+
+  /* USER CODE BEGIN SysInit */
+
+  /* USER CODE END SysInit */
+
+  /* Initialize all configured peripherals */
+  MX_GPIO_Init();
+  MX_DMA_Init();
+  MX_USART2_UART_Init();
+  MX_SPI1_Init();
+  MX_FATFS_Init();
+  MX_UART4_Init();
+  MX_UART5_Init();
+  MX_TIM7_Init();
+  MX_TIM3_Init();
+  MX_I2C1_Init();
+  /* USER CODE BEGIN 2 */
+	HAL_UART_Receive_IT(&huart5, buffer_uart_5, 1);
+	HAL_UART_Receive_IT(&huart4, buffer_uart_4, 1);
+	if (HAL_I2C_EnableListen_IT(&hi2c1) != HAL_OK) {
+			Error_Handler();
+		}
+//	HAL_TIM_Base_Start_IT(&htim7);
+	LCD_Init();
+	LCD_Clear(0x00);
+	SD_readImageBin("car.bin", CAR, CAR_SIZE);
+
+	SD_info_display(park_av);
+
+	LCD_Bitmap_Black(260, 125, COUNT_NUM_WIDTH, COUNT_NUM_HEIGHT, COUNT_NUM);
+
+	//
+	// colocar líneas
+	//
+
+	V_line_thick(20, 60, 170, 10, 0xFFE0);
+	H_line_thick(30, 60, 60, 10, 0xFFE0);
+	H_line_thick(30, 100, 60, 10, 0xFFE0);
+	H_line_thick(30, 140, 60, 10, 0xFFE0);
+	H_line_thick(30, 180, 60, 10, 0xFFE0);
+	H_line_thick(30, 220, 60, 10, 0xFFE0);
+
+	V_line_thick(200, 60, 170, 10, 0xFFE0);
+	H_line_thick(140, 60, 60, 10, 0xFFE0);
+	H_line_thick(140, 100, 60, 10, 0xFFE0);
+	H_line_thick(140, 140, 60, 10, 0xFFE0);
+	H_line_thick(140, 180, 60, 10, 0xFFE0);
+	H_line_thick(140, 220, 60, 10, 0xFFE0);
+
+	LCD_Print("PARKING", 60, 20, 2, 0xFFE0, 0x0000);
+
+	LCD_Print("AVAILABLE", 240, 105, 1, 0xFFE0, 0x0000);
+
+	pixelClear();
+	pixelShow();
+
+  /* USER CODE END 2 */
+
+  /* Infinite loop */
+  /* USER CODE BEGIN WHILE */
+	while (1) {
+		/* USER CODE END WHILE */
+
+		/* USER CODE BEGIN 3 */
+		totalpark = park_av + remote_av;
+		// mostrar número en la pantalla
+		if (totalpark != prev_totalpark) {
+			SD_info_display(totalpark);
+			LCD_Bitmap_Black(260, 125, COUNT_NUM_WIDTH, COUNT_NUM_HEIGHT,
+					COUNT_NUM);
+
+			prev_totalpark = totalpark;
+		}
+
+		updatePixelsFromSensors();
+		sensor_status = getSensorStatusBits();
+		updateRemote_cars(remote_av_masked);
+//		HAL_Delay(100);
+
+	}
+  /* USER CODE END 3 */
+}
+
+/**
+  * @brief System Clock Configuration
+  * @retval None
+  */
+void SystemClock_Config(void)
+{
+  RCC_OscInitTypeDef RCC_OscInitStruct = {0};
+  RCC_ClkInitTypeDef RCC_ClkInitStruct = {0};
+
+  /** Configure the main internal regulator output voltage
+  */
+  __HAL_RCC_PWR_CLK_ENABLE();
+  __HAL_PWR_VOLTAGESCALING_CONFIG(PWR_REGULATOR_VOLTAGE_SCALE3);
+
+  /** Initializes the RCC Oscillators according to the specified parameters
+  * in the RCC_OscInitTypeDef structure.
+  */
+  RCC_OscInitStruct.OscillatorType = RCC_OSCILLATORTYPE_HSI;
+  RCC_OscInitStruct.HSIState = RCC_HSI_ON;
+  RCC_OscInitStruct.HSICalibrationValue = RCC_HSICALIBRATION_DEFAULT;
+  RCC_OscInitStruct.PLL.PLLState = RCC_PLL_ON;
+  RCC_OscInitStruct.PLL.PLLSource = RCC_PLLSOURCE_HSI;
+  RCC_OscInitStruct.PLL.PLLM = 8;
+  RCC_OscInitStruct.PLL.PLLN = 84;
+  RCC_OscInitStruct.PLL.PLLP = RCC_PLLP_DIV2;
+  RCC_OscInitStruct.PLL.PLLQ = 2;
+  RCC_OscInitStruct.PLL.PLLR = 2;
+  if (HAL_RCC_OscConfig(&RCC_OscInitStruct) != HAL_OK)
+  {
+    Error_Handler();
+  }
+
+  /** Initializes the CPU, AHB and APB buses clocks
+  */
+  RCC_ClkInitStruct.ClockType = RCC_CLOCKTYPE_HCLK|RCC_CLOCKTYPE_SYSCLK
+                              |RCC_CLOCKTYPE_PCLK1|RCC_CLOCKTYPE_PCLK2;
+  RCC_ClkInitStruct.SYSCLKSource = RCC_SYSCLKSOURCE_PLLCLK;
+  RCC_ClkInitStruct.AHBCLKDivider = RCC_SYSCLK_DIV1;
+  RCC_ClkInitStruct.APB1CLKDivider = RCC_HCLK_DIV2;
+  RCC_ClkInitStruct.APB2CLKDivider = RCC_HCLK_DIV2;
+
+  if (HAL_RCC_ClockConfig(&RCC_ClkInitStruct, FLASH_LATENCY_2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+}
+
+/**
+  * @brief I2C1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_I2C1_Init(void)
+{
+
+  /* USER CODE BEGIN I2C1_Init 0 */
+
+  /* USER CODE END I2C1_Init 0 */
+
+  /* USER CODE BEGIN I2C1_Init 1 */
+
+  /* USER CODE END I2C1_Init 1 */
+  hi2c1.Instance = I2C1;
+  hi2c1.Init.ClockSpeed = 100000;
+  hi2c1.Init.DutyCycle = I2C_DUTYCYCLE_2;
+  hi2c1.Init.OwnAddress1 = 64;
+  hi2c1.Init.AddressingMode = I2C_ADDRESSINGMODE_7BIT;
+  hi2c1.Init.DualAddressMode = I2C_DUALADDRESS_DISABLE;
+  hi2c1.Init.OwnAddress2 = 0;
+  hi2c1.Init.GeneralCallMode = I2C_GENERALCALL_DISABLE;
+  hi2c1.Init.NoStretchMode = I2C_NOSTRETCH_DISABLE;
+  if (HAL_I2C_Init(&hi2c1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN I2C1_Init 2 */
+
+  /* USER CODE END I2C1_Init 2 */
+
+}
+
+/**
+  * @brief SPI1 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_SPI1_Init(void)
+{
+
+  /* USER CODE BEGIN SPI1_Init 0 */
+
+  /* USER CODE END SPI1_Init 0 */
+
+  /* USER CODE BEGIN SPI1_Init 1 */
+
+  /* USER CODE END SPI1_Init 1 */
+  /* SPI1 parameter configuration*/
+  hspi1.Instance = SPI1;
+  hspi1.Init.Mode = SPI_MODE_MASTER;
+  hspi1.Init.Direction = SPI_DIRECTION_2LINES;
+  hspi1.Init.DataSize = SPI_DATASIZE_8BIT;
+  hspi1.Init.CLKPolarity = SPI_POLARITY_LOW;
+  hspi1.Init.CLKPhase = SPI_PHASE_1EDGE;
+  hspi1.Init.NSS = SPI_NSS_SOFT;
+  hspi1.Init.BaudRatePrescaler = SPI_BAUDRATEPRESCALER_8;
+  hspi1.Init.FirstBit = SPI_FIRSTBIT_MSB;
+  hspi1.Init.TIMode = SPI_TIMODE_DISABLE;
+  hspi1.Init.CRCCalculation = SPI_CRCCALCULATION_DISABLE;
+  hspi1.Init.CRCPolynomial = 10;
+  if (HAL_SPI_Init(&hspi1) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN SPI1_Init 2 */
+
+  /* USER CODE END SPI1_Init 2 */
+
+}
+
+/**
+  * @brief TIM3 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM3_Init(void)
+{
+
+  /* USER CODE BEGIN TIM3_Init 0 */
+
+  /* USER CODE END TIM3_Init 0 */
+
+  TIM_ClockConfigTypeDef sClockSourceConfig = {0};
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+  TIM_OC_InitTypeDef sConfigOC = {0};
+
+  /* USER CODE BEGIN TIM3_Init 1 */
+
+  /* USER CODE END TIM3_Init 1 */
+  htim3.Instance = TIM3;
+  htim3.Init.Prescaler = 0;
+  htim3.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim3.Init.Period = 105-1;
+  htim3.Init.ClockDivision = TIM_CLOCKDIVISION_DIV1;
+  htim3.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sClockSourceConfig.ClockSource = TIM_CLOCKSOURCE_INTERNAL;
+  if (HAL_TIM_ConfigClockSource(&htim3, &sClockSourceConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  if (HAL_TIM_PWM_Init(&htim3) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim3, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sConfigOC.OCMode = TIM_OCMODE_PWM1;
+  sConfigOC.Pulse = 0;
+  sConfigOC.OCPolarity = TIM_OCPOLARITY_HIGH;
+  sConfigOC.OCFastMode = TIM_OCFAST_DISABLE;
+  if (HAL_TIM_PWM_ConfigChannel(&htim3, &sConfigOC, TIM_CHANNEL_4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM3_Init 2 */
+
+  /* USER CODE END TIM3_Init 2 */
+  HAL_TIM_MspPostInit(&htim3);
+
+}
+
+/**
+  * @brief TIM7 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_TIM7_Init(void)
+{
+
+  /* USER CODE BEGIN TIM7_Init 0 */
+
+  /* USER CODE END TIM7_Init 0 */
+
+  TIM_MasterConfigTypeDef sMasterConfig = {0};
+
+  /* USER CODE BEGIN TIM7_Init 1 */
+
+  /* USER CODE END TIM7_Init 1 */
+  htim7.Instance = TIM7;
+  htim7.Init.Prescaler = 840-1;
+  htim7.Init.CounterMode = TIM_COUNTERMODE_UP;
+  htim7.Init.Period = 998-1;
+  htim7.Init.AutoReloadPreload = TIM_AUTORELOAD_PRELOAD_DISABLE;
+  if (HAL_TIM_Base_Init(&htim7) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  sMasterConfig.MasterOutputTrigger = TIM_TRGO_RESET;
+  sMasterConfig.MasterSlaveMode = TIM_MASTERSLAVEMODE_DISABLE;
+  if (HAL_TIMEx_MasterConfigSynchronization(&htim7, &sMasterConfig) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN TIM7_Init 2 */
+
+  /* USER CODE END TIM7_Init 2 */
+
+}
+
+/**
+  * @brief UART4 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UART4_Init(void)
+{
+
+  /* USER CODE BEGIN UART4_Init 0 */
+
+  /* USER CODE END UART4_Init 0 */
+
+  /* USER CODE BEGIN UART4_Init 1 */
+
+  /* USER CODE END UART4_Init 1 */
+  huart4.Instance = UART4;
+  huart4.Init.BaudRate = 9600;
+  huart4.Init.WordLength = UART_WORDLENGTH_8B;
+  huart4.Init.StopBits = UART_STOPBITS_1;
+  huart4.Init.Parity = UART_PARITY_NONE;
+  huart4.Init.Mode = UART_MODE_TX_RX;
+  huart4.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart4.Init.OverSampling = UART_OVERSAMPLING_8;
+  if (HAL_UART_Init(&huart4) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN UART4_Init 2 */
+
+  /* USER CODE END UART4_Init 2 */
+
+}
+
+/**
+  * @brief UART5 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_UART5_Init(void)
+{
+
+  /* USER CODE BEGIN UART5_Init 0 */
+
+  /* USER CODE END UART5_Init 0 */
+
+  /* USER CODE BEGIN UART5_Init 1 */
+
+  /* USER CODE END UART5_Init 1 */
+  huart5.Instance = UART5;
+  huart5.Init.BaudRate = 9600;
+  huart5.Init.WordLength = UART_WORDLENGTH_8B;
+  huart5.Init.StopBits = UART_STOPBITS_1;
+  huart5.Init.Parity = UART_PARITY_NONE;
+  huart5.Init.Mode = UART_MODE_TX_RX;
+  huart5.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart5.Init.OverSampling = UART_OVERSAMPLING_8;
+  if (HAL_UART_Init(&huart5) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN UART5_Init 2 */
+
+  /* USER CODE END UART5_Init 2 */
+
+}
+
+/**
+  * @brief USART2 Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_USART2_UART_Init(void)
+{
+
+  /* USER CODE BEGIN USART2_Init 0 */
+
+  /* USER CODE END USART2_Init 0 */
+
+  /* USER CODE BEGIN USART2_Init 1 */
+
+  /* USER CODE END USART2_Init 1 */
+  huart2.Instance = USART2;
+  huart2.Init.BaudRate = 115200;
+  huart2.Init.WordLength = UART_WORDLENGTH_8B;
+  huart2.Init.StopBits = UART_STOPBITS_1;
+  huart2.Init.Parity = UART_PARITY_NONE;
+  huart2.Init.Mode = UART_MODE_TX_RX;
+  huart2.Init.HwFlowCtl = UART_HWCONTROL_NONE;
+  huart2.Init.OverSampling = UART_OVERSAMPLING_16;
+  if (HAL_UART_Init(&huart2) != HAL_OK)
+  {
+    Error_Handler();
+  }
+  /* USER CODE BEGIN USART2_Init 2 */
+
+  /* USER CODE END USART2_Init 2 */
+
+}
+
+/**
+  * Enable DMA controller clock
+  */
+static void MX_DMA_Init(void)
+{
+
+  /* DMA controller clock enable */
+  __HAL_RCC_DMA1_CLK_ENABLE();
+
+  /* DMA interrupt init */
+  /* DMA1_Stream2_IRQn interrupt configuration */
+  HAL_NVIC_SetPriority(DMA1_Stream2_IRQn, 0, 0);
+  HAL_NVIC_EnableIRQ(DMA1_Stream2_IRQn);
+
+}
+
+/**
+  * @brief GPIO Initialization Function
+  * @param None
+  * @retval None
+  */
+static void MX_GPIO_Init(void)
+{
+  GPIO_InitTypeDef GPIO_InitStruct = {0};
+  /* USER CODE BEGIN MX_GPIO_Init_1 */
+
+  /* USER CODE END MX_GPIO_Init_1 */
+
+  /* GPIO Ports Clock Enable */
+  __HAL_RCC_GPIOH_CLK_ENABLE();
+  __HAL_RCC_GPIOC_CLK_ENABLE();
+  __HAL_RCC_GPIOA_CLK_ENABLE();
+  __HAL_RCC_GPIOB_CLK_ENABLE();
+  __HAL_RCC_GPIOD_CLK_ENABLE();
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOC, LCD_RST_Pin|LCD_D1_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOA, LCD_RD_Pin|LCD_WR_Pin|LCD_RS_Pin|LCD_D7_Pin
+                          |LCD_D0_Pin|LCD_D2_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(GPIOB, LCD_CS_Pin|LCD_D6_Pin|LCD_D3_Pin|LCD_D5_Pin
+                          |LCD_D4_Pin, GPIO_PIN_RESET);
+
+  /*Configure GPIO pin Output Level */
+  HAL_GPIO_WritePin(SD_SS_GPIO_Port, SD_SS_Pin, GPIO_PIN_SET);
+
+  /*Configure GPIO pins : LCD_RST_Pin LCD_D1_Pin */
+  GPIO_InitStruct.Pin = LCD_RST_Pin|LCD_D1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOC, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LCD_RD_Pin LCD_WR_Pin LCD_RS_Pin LCD_D7_Pin
+                           LCD_D0_Pin LCD_D2_Pin */
+  GPIO_InitStruct.Pin = LCD_RD_Pin|LCD_WR_Pin|LCD_RS_Pin|LCD_D7_Pin
+                          |LCD_D0_Pin|LCD_D2_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOA, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : S1_Pin */
+  GPIO_InitStruct.Pin = S1_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(S1_GPIO_Port, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : LCD_CS_Pin LCD_D6_Pin LCD_D3_Pin LCD_D5_Pin
+                           LCD_D4_Pin */
+  GPIO_InitStruct.Pin = LCD_CS_Pin|LCD_D6_Pin|LCD_D3_Pin|LCD_D5_Pin
+                          |LCD_D4_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_VERY_HIGH;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pins : S2_Pin S3_Pin S4_Pin */
+  GPIO_InitStruct.Pin = S2_Pin|S3_Pin|S4_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_INPUT;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  HAL_GPIO_Init(GPIOB, &GPIO_InitStruct);
+
+  /*Configure GPIO pin : SD_SS_Pin */
+  GPIO_InitStruct.Pin = SD_SS_Pin;
+  GPIO_InitStruct.Mode = GPIO_MODE_OUTPUT_PP;
+  GPIO_InitStruct.Pull = GPIO_NOPULL;
+  GPIO_InitStruct.Speed = GPIO_SPEED_FREQ_MEDIUM;
+  HAL_GPIO_Init(SD_SS_GPIO_Port, &GPIO_InitStruct);
+
+  /* USER CODE BEGIN MX_GPIO_Init_2 */
+
+  /* USER CODE END MX_GPIO_Init_2 */
+}
+
+/* USER CODE BEGIN 4 */
+
+void HAL_I2C_ListenCpltCallback(I2C_HandleTypeDef *hi2c) {
+	HAL_I2C_EnableListen_IT(hi2c);
+}
+
+void HAL_I2C_SlaveTxCpltCallback(I2C_HandleTypeDef *I2cHandle) {
+	aTxBuffer[0] = sensor_status;
+}
+
+void HAL_I2C_SlaveRxCpltCallback(I2C_HandleTypeDef *I2cHandle) {
+	remote_av_raw  = aRxBuffer[0];
+	remote_av_masked = remote_av_raw & 0x0F;
+
+	// Contar bits en 1 (espacios disponibles)
+	uint8_t count = 0;
+	for (int i = 0; i < 4; i++) {
+	    if ((remote_av_masked >> i) & 0x01) {
+	        count++;
+	    }
+	}
+
+	remote_av = count;
+}
+
+void HAL_I2C_AddrCallback(I2C_HandleTypeDef *hi2c, uint8_t TransferDirection,
+		uint16_t AddrMatchCode) {
+	if (TransferDirection == I2C_DIRECTION_TRANSMIT) {
+		if (HAL_I2C_Slave_Seq_Receive_IT(&hi2c1, aRxBuffer, 1,
+				I2C_FIRST_AND_LAST_FRAME) != HAL_OK) {
+			Error_Handler();
+		}
+	} else if (TransferDirection == I2C_DIRECTION_RECEIVE) {
+		if (HAL_I2C_Slave_Seq_Transmit_IT(&hi2c1, aTxBuffer, 1,
+				I2C_FIRST_AND_LAST_FRAME) != HAL_OK) {
+			Error_Handler();
+		}
+	}
+}
+
+void HAL_I2C_ErrorCallback(I2C_HandleTypeDef *I2cHandle) {
+	if (HAL_I2C_GetError(I2cHandle) != HAL_I2C_ERROR_AF) {
+		Error_Handler();
+	}
+}
+void HAL_UART_RxCpltCallback(UART_HandleTypeDef *huart) {
+	if (huart->Instance == UART5) {
+		input = buffer_uart_5[0];  // comando recibido
+		HAL_UART_Receive_IT(&huart5, buffer_uart_5, 1);
+	}
+
+	if (huart->Instance == UART4) {
+		HAL_UART_Receive_IT(&huart4, buffer_uart_4, 1);
+	}
+}
+
+void transmit_uart(char *string) {
+	uint8_t len = strlen(string);
+	HAL_UART_Transmit(&huart2, (uint8_t*) string, len, 200);
+}
+void list_files_on_sd(void) {
+	DIR dir;
+	FILINFO fno;
+	FRESULT res;
+
+	res = f_opendir(&dir, "/"); // Abrir directorio raíz
+	if (res == FR_OK) {
+		transmit_uart("Archivos en la SD:\n");
+		while (1) {
+			res = f_readdir(&dir, &fno); // Leer archivo/directorio
+			if (res != FR_OK || fno.fname[0] == 0)
+				break;
+			transmit_uart(fno.fname); // Enviar nombre por UART
+			transmit_uart("\n");
+		}
+		f_closedir(&dir);
+	} else {
+		transmit_uart("Error al abrir el directorio\n");
+	}
+}
+
+void erase_file(void) {
+	FRESULT res;
+
+	res = f_unlink("ascii-art.txt");
+	if (res == FR_OK) {
+		transmit_uart("Archivo eliminado correctamente\n");
+	} else {
+		transmit_uart("Error al eliminar el archivo\n");
+	}
+}
+void SD_readLine(void) {
+	while (f_gets(buffer, sizeof(buffer), &fil)) {
+		char mRd[100];
+		sprintf(mRd, "%s", buffer);
+		transmit_uart(mRd);
+	}
+}
+FRESULT SD_close(void) {
+	FRESULT fres = f_close(&fil);
+	if (fres == FR_OK) {
+		transmit_uart("The file is closed\n");
+	} else {
+		transmit_uart("The file was not closed\n");
+	}
+	return fres;
+}
+FRESULT SD_open(const char *filename, BYTE mode) {
+	FRESULT fres = f_open(&fil, filename, mode);
+	if (fres == FR_OK) {
+		transmit_uart("File opened successfully\n");
+	} else {
+		transmit_uart("File was not opened\n");
+	}
+	return fres;
+}
+FRESULT SD_unmount(void) {
+	FRESULT fres = f_mount(NULL, "", 1);
+	if (fres == FR_OK) {
+		transmit_uart("The Micro SD card is unmounted\n");
+	} else {
+		transmit_uart("The Micro SD was not unmounted\n");
+	}
+	return fres;
+}
+FRESULT SD_mount(void) {
+	FRESULT fres = f_mount(&fs, "", 0);
+	if (fres == FR_OK) {
+		transmit_uart("Micro SD card is mounted successfully!\n");
+	} else {
+		transmit_uart("Micro SD card's mount error!\n");
+	}
+	return fres;
+}
+FRESULT SD_createFile(const char *filename) {
+	FRESULT fres = f_open(&fil, filename, FA_OPEN_APPEND | FA_WRITE | FA_READ);
+	if (fres == FR_OK) {
+		transmit_uart("File opened for writing/appending\n");
+	} else {
+		transmit_uart("File was not opened for writing/appending\n");
+	}
+	return fres;
+}
+FRESULT SD_write(const char *text) {
+	if (f_puts(text, &fil) > 0) {
+		transmit_uart("Text written successfully\n");
+		return FR_OK;
+	} else {
+		transmit_uart("Failed to write text\n");
+		return FR_DISK_ERR;
+	}
+}
+
+void SD_readImageBin(const char *filename, uint8_t *dest, uint32_t size) {
+	UINT br;
+
+	if (SD_mount() == FR_OK) {
+		if (SD_open(filename, FA_READ) == FR_OK) {
+			f_read(&fil, dest, size, &br);
+			f_close(&fil);
+		}
+		SD_unmount();
+	}
+}
+
+void SD_info_display(uint8_t numero) {
+    const char* archivos[] = {
+        "cero.bin",
+        "uno.bin",
+        "dos.bin",
+        "tres.bin",
+        "cuatro.bin",
+        "cinco.bin",
+        "seis.bin",
+        "siete.bin",
+        "ocho.bin"
+    };
+
+    if (numero > 8) return;
+
+    SD_readImageBin(archivos[numero], COUNT_NUM, COUNT_NUM_SIZE);
+}
+
+
+void LCD_Bitmap_Black(unsigned int x, unsigned int y, unsigned int width,
+		unsigned int height, unsigned char bitmap[]) {
+	LCD_CMD(0x02C); // write_memory_start
+	HAL_GPIO_WritePin(LCD_RS_GPIO_Port, LCD_RS_Pin, GPIO_PIN_SET);
+	HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_RESET);
+
+	SetWindows(x, y, x + width - 1, y + height - 1);
+	unsigned int k = 0;
+
+	for (int j = 0; j < height; j++) {
+		for (int i = 0; i < width; i++) {
+			// Obtener el color del sprite
+			uint8_t high = bitmap[k];
+			uint8_t low = bitmap[k + 1];
+			uint16_t color = (high << 8) | low;
+
+			int screen_x = x + i;
+			int screen_y = y + j;
+
+			// Verificar que está dentro del área visible
+			if (screen_x >= 0&& screen_x < 320 &&
+			screen_y >= 0 && screen_y < 240) {
+
+				if (color == TRANSPARENT_COLOR) {
+					// Pintar negro
+					high = 0x00;
+					low = 0x00;
+				}
+
+				LCD_DATA(high);
+				LCD_DATA(low);
+			} else {
+				// Si está fuera de rango
+				LCD_DATA(0x00);
+				LCD_DATA(0x00);
+			}
+
+			k += 2;
+		}
+	}
+
+	HAL_GPIO_WritePin(LCD_CS_GPIO_Port, LCD_CS_Pin, GPIO_PIN_SET);
+}
+
+void Rect_Grueso(unsigned int x, unsigned int y, unsigned int w, unsigned int h,
+		unsigned int c) {
+	for (int i = 0; i < 5; i++) {
+		Rect(x - i, y - i, w + (2 * i), h + (2 * i), c);
+	}
+}
+void updatePixelsFromSensors(void) {
+    static uint8_t prev_s1 = 1, prev_s2 = 1, prev_s3 = 1, prev_s4 = 1;
+    uint8_t s1 = HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_4);  // PC4
+    uint8_t s2 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13); // PB13
+    uint8_t s3 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_14); // PB14
+    uint8_t s4 = HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_15); // PB15
+
+    // SENSOR 1
+    if (s1) {
+        setPixelColor(3, 0, 255, 0);  // Verde
+        FillRect(30, 190, 60, 30, 0x00);
+        V_line_thick(5, 195, 20, 10, 0x07E0);
+        if (prev_s1 == 0 && park_av < 8) park_av++;  // de ocupado a libre
+    } else {
+        setPixelColor(3, 255, 0, 0);  // Rojo
+        LCD_Bitmap_Black(30, 190, CAR_WIDTH, CAR_HEIGHT, CAR);
+        V_line_thick(5, 195, 20, 10, 0xF800);
+        if (prev_s1 == 1 && park_av > 0) park_av--;  // de libre a ocupado
+    }
+    prev_s1 = s1;
+
+    // SENSOR 2
+    if (s2) {
+        setPixelColor(2, 0, 255, 0);
+        FillRect(30, 150, 60, 30, 0x00);
+        V_line_thick(5, 155, 20, 10, 0x07E0);
+        if (prev_s2 == 0 && park_av < 8) park_av++;
+    } else {
+        setPixelColor(2, 255, 0, 0);
+        LCD_Bitmap_Black(30, 150, CAR_WIDTH, CAR_HEIGHT, CAR);
+        V_line_thick(5, 155, 20, 10, 0xF800);
+        if (prev_s2 == 1 && park_av > 0) park_av--;
+    }
+    prev_s2 = s2;
+
+    // SENSOR 3
+    if (s3) {
+        setPixelColor(1, 0, 255, 0);
+        FillRect(30, 110, 60, 30, 0x00);
+        V_line_thick(5, 115, 20, 10, 0x07E0);
+        if (prev_s3 == 0 && park_av < 8) park_av++;
+    } else {
+        setPixelColor(1, 255, 0, 0);
+        LCD_Bitmap_Black(30, 110, CAR_WIDTH, CAR_HEIGHT, CAR);
+        V_line_thick(5, 115, 20, 10, 0xF800);
+        if (prev_s3 == 1 && park_av > 0) park_av--;
+    }
+    prev_s3 = s3;
+
+    // SENSOR 4
+    if (s4) {
+        setPixelColor(0, 0, 255, 0);
+        FillRect(30, 70, 60, 30, 0x00);
+        V_line_thick(5, 75, 20, 10, 0x07E0);
+        if (prev_s4 == 0 && park_av < 8) park_av++;
+    } else {
+        setPixelColor(0, 255, 0, 0);
+        LCD_Bitmap_Black(30, 70, CAR_WIDTH, CAR_HEIGHT, CAR);
+        V_line_thick(5, 75, 20, 10, 0xF800);
+        if (prev_s4 == 1 && park_av > 0) park_av--;
+    }
+    prev_s4 = s4;
+
+    setBrightness(30);
+    pixelShow();
+}
+
+
+
+uint8_t getSensorStatusBits(void) {
+    uint8_t result = 0;
+
+    if (HAL_GPIO_ReadPin(GPIOC, GPIO_PIN_4))  result |= (1 << 0); // s1 → Bit 0
+    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_13)) result |= (1 << 1); // s2 → Bit 1
+    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_14)) result |= (1 << 2); // s3 → Bit 2
+    if (HAL_GPIO_ReadPin(GPIOB, GPIO_PIN_15)) result |= (1 << 3); // s4 → Bit 3
+
+    return result;
+}
+
+void updateRemote_cars(uint8_t remote_masked) {
+    // 4 bits menos significativos
+    for (int i = 0; i < 4; i++) {
+        uint8_t bit = (remote_masked >> i) & 0x01;
+
+        int yPos = 190 - (i * 40);
+
+        if (bit) {
+            FillRect(140, yPos, 60, 30, 0x00);  // Borrar carro
+            V_line_thick(215, yPos, 20, 10, 0x07E0);
+        } else {
+            LCD_Bitmap_Black(140, yPos, CAR_WIDTH, CAR_HEIGHT, CAR);  // Dibujar carro
+            V_line_thick(215, yPos, 20, 10, 0xF800);
+        }
+    }
+
+    setBrightness(30);
+    pixelShow();
+}
+
+
+
+
+/* USER CODE END 4 */
+
+/**
+  * @brief  Period elapsed callback in non blocking mode
+  * @note   This function is called  when TIM1 interrupt took place, inside
+  * HAL_TIM_IRQHandler(). It makes a direct call to HAL_IncTick() to increment
+  * a global variable "uwTick" used as application time base.
+  * @param  htim : TIM handle
+  * @retval None
+  */
+void HAL_TIM_PeriodElapsedCallback(TIM_HandleTypeDef *htim)
+{
+  /* USER CODE BEGIN Callback 0 */
+	if (htim == &htim7) {
+
+	}
+  /* USER CODE END Callback 0 */
+  if (htim->Instance == TIM1)
+  {
+    HAL_IncTick();
+  }
+  /* USER CODE BEGIN Callback 1 */
+//
+  /* USER CODE END Callback 1 */
+}
+
+/**
+  * @brief  This function is executed in case of error occurrence.
+  * @retval None
+  */
+void Error_Handler(void)
+{
+  /* USER CODE BEGIN Error_Handler_Debug */
+	/* User can add his own implementation to report the HAL error return state */
+	__disable_irq();
+	while (1) {
+	}
+  /* USER CODE END Error_Handler_Debug */
+}
+
+#ifdef  USE_FULL_ASSERT
+/**
+  * @brief  Reports the name of the source file and the source line number
+  *         where the assert_param error has occurred.
+  * @param  file: pointer to the source file name
+  * @param  line: assert_param error line source number
+  * @retval None
+  */
+void assert_failed(uint8_t *file, uint32_t line)
+{
+  /* USER CODE BEGIN 6 */
+  /* User can add his own implementation to report the file name and line number,
+     ex: printf("Wrong parameters value: file %s on line %d\r\n", file, line) */
+  /* USER CODE END 6 */
+}
+#endif /* USE_FULL_ASSERT */
